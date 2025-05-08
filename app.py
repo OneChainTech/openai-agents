@@ -1,7 +1,7 @@
 import streamlit as st
 import asyncio
 from openai import AsyncOpenAI
-from agents import Agent, OpenAIChatCompletionsModel, Runner, set_tracing_disabled
+from agents import Agent, OpenAIChatCompletionsModel, Runner, set_tracing_disabled, trace # 添加 trace 导入
 from agents.mcp import MCPServerSse
 from agents.model_settings import ModelSettings
 import nest_asyncio
@@ -61,36 +61,38 @@ async def process_query(user_query):
         st.info("当前使用 DeepSeek API (模型: " + selected_model_name + ")")
 
     st.info("准备连接到 MCP 服务器...")
-    async with MCPServerSse(
-        name="Amap Maps Server",
-        params={
-            "url": "https://mcp-e7501f2d-826a-4be5.api-inference.modelscope.cn/sse",
-            "timeout": 30  # 增加超时时间到30秒
-        }
-    ) as mcp_server:
-        try:
-            st.info("正在连接 MCP 服务器...")
-            await mcp_server.connect()
-            st.success("MCP 服务器连接成功！")
-            
-            agent = Agent(
-                name="Assistant",
-                instructions="我是一个可以帮助查询地理信息的助手,我可以帮你查询天气、地址、路线等信息。",
-                model=OpenAIChatCompletionsModel(
-                    model=selected_model_name, 
-                    openai_client=selected_client
-                ),
-                mcp_servers=[mcp_server],
-                model_settings=ModelSettings(tool_choice="required")
-            )
-            
-            st.info("Agent 已配置，准备通过 MCP 服务器处理查询...")
-            result = await run_with_retry(agent, user_query)
-            return result.final_output
-        except Exception as e:
-            st.error(f"MCP 处理或 Agent 运行失败：{str(e)}")
-            # 确保在 MCPServerSse 的 __aexit__ 被调用前抛出异常，以便正确关闭
-            raise
+    # 使用 trace 包裹核心处理流程
+    with trace("Geographic Info Query Workflow", metadata={"user_query": user_query}):
+        async with MCPServerSse(
+            name="Amap Maps Server",
+            params={
+                "url": "https://mcp-e7501f2d-826a-4be5.api-inference.modelscope.cn/sse",
+                "timeout": 30  # 增加超时时间到30秒
+            }
+        ) as mcp_server:
+            try:
+                st.info("正在连接 MCP 服务器...")
+                await mcp_server.connect()
+                st.success("MCP 服务器连接成功！")
+                
+                agent = Agent(
+                    name="Assistant",
+                    instructions="我是一个可以帮助查询地理信息的助手,我可以帮你查询天气、地址、路线等信息。",
+                    model=OpenAIChatCompletionsModel(
+                        model=selected_model_name, 
+                        openai_client=selected_client
+                    ),
+                    mcp_servers=[mcp_server],
+                    model_settings=ModelSettings(tool_choice="required")
+                )
+                
+                st.info("Agent 已配置，准备通过 MCP 服务器处理查询...")
+                result = await run_with_retry(agent, user_query)
+                return result.final_output
+            except Exception as e:
+                st.error(f"MCP 处理或 Agent 运行失败：{str(e)}")
+                # 确保在 MCPServerSse 的 __aexit__ 被调用前抛出异常，以便正确关闭
+                raise
 
 def run_async(coro):
     loop = asyncio.new_event_loop()
@@ -101,7 +103,7 @@ def run_async(coro):
         loop.close()
 
 # 禁用跟踪
-set_tracing_disabled(disabled=True)
+set_tracing_disabled(disabled=False)
 
 # 创建输入框
 user_query = st.text_input("请输入您的问题", placeholder="例如：北京的天气怎么样？或者 北京到上海怎么走？")
