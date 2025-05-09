@@ -43,26 +43,42 @@ def get_qwen_client():
         timeout=60.0
     )
 
+@st.cache_resource
+def get_siliconflow_client():
+    return AsyncOpenAI(
+        base_url="https://api.siliconflow.cn/v1", # 注意：通常 base_url 不包含 /chat/completions
+        api_key="sk-owuhchfalamktrcqsbhhuuxcgfdwcwekrrggmpoomggifotn",
+        timeout=60.0
+    )
+
 @backoff.on_exception(backoff.expo, Exception, max_tries=3)
 async def run_streamed_with_retry(agent, query):
     return Runner.run_streamed(agent, query)
 
-async def generate_agent_response_stream(user_query_param: str):
+async def generate_agent_response_stream(user_query_param: str, selected_api_provider: str):
     """
     Sets up the agent, connects to MCP, runs the query, and yields response chunks.
     This function is designed to be used with st.write_stream.
     """
-    # 设置为 True 使用 Qwen API, 设置为 False 使用 DeepSeek API
-    USE_QWEN_API = True 
+    # # 设置为 True 使用 Qwen API, 设置为 False 使用 DeepSeek API # REMOVED OLD LOGIC
+    # USE_QWEN_API = True  # REMOVED OLD LOGIC
 
-    if USE_QWEN_API:
+    if selected_api_provider == "Qwen":
         selected_model_name = "qwen-turbo"
         selected_client = get_qwen_client()
         # UI updates like st.info should ideally be outside the generator if they need to appear before streaming.
         # However, for simplicity in this refactor, keeping some logic here.
         # Consider moving pre-stream UI updates to the button click handler.
-    else:
+    elif selected_api_provider == "DeepSeek":
         selected_model_name = "deepseek-chat"
+        selected_client = get_openai_client() # This is the DeepSeek client
+    elif selected_api_provider == "SiliconFlow":
+        selected_model_name = "Qwen/Qwen3-235B-A22B"
+        selected_client = get_siliconflow_client()
+    else: # Default or error case
+        # This part can be enhanced, e.g., by showing an error in Streamlit and stopping
+        print(f"错误：未知的 API 提供商 '{selected_api_provider}'. 将默认使用 DeepSeek。") 
+        selected_model_name = "deepseek-chat" 
         selected_client = get_openai_client()
 
     # Note: st.info calls within an async generator passed to st.write_stream might not behave as expected
@@ -121,7 +137,7 @@ async def generate_agent_response_stream(user_query_param: str):
                     openai_client=selected_client
                 ),
                 mcp_servers=[mcp_server],
-                model_settings=ModelSettings(tool_choice="required") 
+                model_settings=ModelSettings(tool_choice="auto" if selected_api_provider == "SiliconFlow" else "required") 
                 # Note: tool_choice="required" means the agent MUST use a tool.
                 # Streaming text deltas (ResponseTextDeltaEvent) typically happens
                 # when the LLM generates a direct text response or the text part of a response after tool use.
@@ -156,23 +172,28 @@ set_tracing_disabled(disabled=True) # Disable tracing
 # 创建输入框
 user_query = st.text_input("请输入您的问题", placeholder="例如：北京的天气怎么样？或者 北京到上海怎么走？")
 
+# 添加模型选择下拉框
+model_options = ["Qwen", "DeepSeek", "SiliconFlow"]
+selected_model_provider = st.selectbox("请选择大模型服务商:", model_options, index=0) # Default to Qwen
+
 # 创建发送按钮
 if st.button("发送", type="primary"):
     if user_query:
         # Display initial status messages before starting the stream
         st.info(f"收到问题：'{user_query}'. 开始处理...")
-        if True: # Simplified from USE_QWEN_API for this example message
-            st.info("当前使用 Qwen API")
-        else:
-            st.info("当前使用 DeepSeek API")
+        # if True: # Simplified from USE_QWEN_API for this example message # REMOVED OLD LOGIC
+        #     st.info("当前使用 Qwen API") # REMOVED OLD LOGIC
+        # else: # REMOVED OLD LOGIC
+        #     st.info("当前使用 DeepSeek API") # REMOVED OLD LOGIC
+        st.info(f"当前使用 {selected_model_provider} API") # ADDED NEW LOGIC
         st.info("准备连接到 MCP 服务器...")
 
         with st.spinner("正在思考中..."):
             try:
                 # Directly use st.write_stream with the async generator function
                 st.write("回答：") # Label for the answer area
-                # Pass the user_query to the generator function
-                st.write_stream(generate_agent_response_stream(user_query))
+                # Pass the user_query and selected_model_provider to the generator function
+                st.write_stream(generate_agent_response_stream(user_query, selected_model_provider)) # MODIFIED CALL
                 st.success("查询完成！") # Appears after the stream finishes
             except Exception as e:
                 st.error(f"发生错误: {str(e)}")
